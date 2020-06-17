@@ -78,3 +78,4 @@ class Demosaicise(object):
         rgb[2:,:] = raw[0,1::2,1::2]
         
         return rgb
+    

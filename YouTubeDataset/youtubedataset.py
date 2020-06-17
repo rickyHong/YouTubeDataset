@@ -37,7 +37,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
                  video_fmt='rgb24', video_cliplen=1, video_stridelen=-1, video_transform=None,
                  audio_fmt='s16', audio_layout='mono', audio_sr=44100,  audio_cliplen=-1, audio_transform=None,
                  text_lang='en', text_transform=None,
-                 download=False, api_key=None, channel_id=None, user_name=None, splits={'train':0.90, 'test':0.1}):
+                 download=False, api_key=None, channel_id=None, user_name=None, splits={'train':0.80, 'test':0.20}):
         """
         Args:
             root_dir (string): Directory with all downloaded channels
