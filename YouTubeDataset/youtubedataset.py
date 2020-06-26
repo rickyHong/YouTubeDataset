@@ -34,7 +34,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
 
     
     def __init__(self, root_dir, channel, split='train', fields=[F_VF_DATA,F_TIME], key=F_VF_DATA,
-                 video_fmt='rgb24', video_cliplen=1, video_stridelen=-1, video_transform=None,
+                 video_fmt='rgb24', video_cliplen=1, video_stridelen=-1, image_transform=None, video_transform=None,
                  audio_fmt='s16', audio_layout='mono', audio_sr=44100,  audio_cliplen=-1, audio_transform=None,
                  text_lang='en', text_transform=None,
                  download=False, api_key=None, channel_id=None, user_name=None, splits={'train':0.80, 'test':0.20}):
@@ -68,6 +68,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         self.fields = fields
         self.key = key
         self.channel = channel
+        self.image_transform = image_transform
         self.video_transform = video_transform
         self.audio_transform = audio_transform
         self.text_transform = text_transform
@@ -193,7 +194,9 @@ class YTDSIterator():
         container = av.open(video_path)
         self.audio = container.decode(audio=0)
 
-        if container.streams.audio[0].sample_rate != self.dataset.audio_sr:
+        if (container.streams.audio[0].sample_rate != self.dataset.audio_sr or 
+            container.streams.audio[0].layout != self.dataset.audio_layout or
+            container.streams.audio[0].format != self.dataset.audio_format):
             self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_fmt, self.dataset.audio_layout, self.dataset.audio_sr)
         else:
             self.audio_resampler = None
@@ -296,8 +299,8 @@ class YTDSIterator():
                     for i in range(stride):
                         vf = next(self.video)
                     vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_fmt), (2, 0, 1)) # (C, H, W) Image Tensor
-                    if self.dataset.video_transform:
-                        vf_data = self.dataset.video_transform(vf_data)
+                    if self.dataset.image_transform:
+                        vf_data = self.dataset.image_transform(vf_data)
                     result[YouTubeDataset.F_VF_DATA] = vf_data    
                     self.vclip_time = vf.time
                 else:
@@ -310,8 +313,8 @@ class YTDSIterator():
                         while len(self.vclip) < video_cliplen:
                             vf = next(self.video)
                             vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_fmt), (2, 0, 1)) # (C, H, W) Image Tensor
-                            if self.dataset.video_transform:
-                                vf_data = self.dataset.video_transform(vf_data)
+                            if self.dataset.image_transform:
+                                vf_data = self.dataset.image_transform(vf_data)
                             else:
                                 vf_data = torch.from_numpy(vf_data)
                             self.vclip.append((vf_data, vf.time))
@@ -321,7 +324,11 @@ class YTDSIterator():
                             raise StopIteration()            
 
                     # vf_data = torch.stack([ i[0] for i in self.vclip]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
-                    result[YouTubeDataset.F_VF_DATA] = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
+                    vf_data = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
+                    if self.dataset.video_transform:
+                        vf_data = self.dataset.video_transform(vf_data)
+                    result[YouTubeDataset.F_VF_DATA] = vf_data    
+
                     self.vclip_time = self.vclip[0][1]
 
                     self.vclip = self.vclip[stride:]
