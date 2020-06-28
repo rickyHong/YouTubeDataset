@@ -21,7 +21,6 @@ import pytube
 from tqdm import tqdm
 
 
-
 class YouTubeDataset(torch.utils.data.IterableDataset):
     F_VIDEOID = 'VIDEOID'
     F_TITLE = 'TITLE'
@@ -34,18 +33,87 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
 
     
     def __init__(self, root_dir, channel, split='train', fields=[F_VF_DATA,F_TIME], key=F_VF_DATA,
-                 video_fmt='rgb24', video_cliplen=1, video_stridelen=-1, image_transform=None, video_transform=None,
-                 audio_fmt='s16', audio_layout='mono', audio_sr=44100,  audio_cliplen=-1, audio_transform=None,
+                 video_format='rgb24', video_framerate=None, video_cliplen=1, video_stridelen=None, image_transform=None, video_transform=None,
+                 audio_format='s16', audio_layout='mono', audio_sr=44100,  audio_cliplen=-1, audio_transform=None,
                  text_lang='en', text_transform=None,
                  download=False, api_key=None, channel_id=None, user_name=None, splits={'train':0.80, 'test':0.20}):
         """
+        YouTubeDataset is a flexible video dataset creation tool.
+        It allows the downloading of a complete YouTube channel as a dataset.
+        
+        Downloading a channel dataset with YouTubeDataset is easy, set the ``download`` flag to True, 
+        and set ``api_key`` to a Google Cloud Platform API Key with rights for the YouTube Data API V3, 
+        and the YouTube ``channel_id``. The download will start automatically, and cache the dataset
+        locally in ``root_dir``/``channel``.
+        
+        To use the dataset, set the `fields` parameter to a list of fields that will be extracted
+        from the dataset and presented by the iterator, and the ``key`` parameter to what key field is.
+        
+        ``fields`` is a list of one or more of the following ``fieldnames``:
+        
+        
+        ``key`` refers to the dataset key field. The key field determines the length of all the
+        other dataset fields.
+        If ``key`` is ``VF_DATA``, then the duration of ``AF_AUDIO`` and ``CC_TEXT`` fields are 
+        determined by the ``video_cliplen`` which is the number of frames to present. 
+        If ``video_cliplen`` is 1 then ``VF_DATA`` frames are presented as TorchVision 
+        image tensors Tensor[H, W, C], otherwise they are presented as TorchVision 
+        video tensors Tensor[T, H, W, C].
+        
+        If using ``CC_TEXT`` as the key, you will need to get the max text duration from the ``max_text_dur`` property,
+        and pad the data to the max duration in the video_transform and audio_transform.
+        
+        
         Args:
-            root_dir (string): Directory with all downloaded channels
-            channel (string): Name of the Channel Dataset to load
-            split (string, optional): The dataset split, supports train, test, or validate
-            transform (callable, optional): Optional transform to be applied
-                on a sample.
+            root_dir (string): Root directory of the YouTube Dataset.
+            channel (string):  Name to identify dataset locally
+            split (string): The split to present - splits are determined by ``splits`` dictionary
+            fields (list, optional): A list of ``fieldnames`` representing the data fields presented by the iterator
+            key (string, optional): The key field's ``fieldname``
+            video_format (string, optional): The video pixel format one of: 'yuv420p','rgb24', 'rgba'
+            video_framerate (int, optional): if specified, it will resample the video
+                so that it has `frame_rate`, and then the clips will be defined on the resampled video
+            video_cliplen (int, optional): number of frames in a clip
+            video_stridelen (int, optional): number of frames between each clip
+            video_transform (callable, optional): A function/transform that  takes in a TxHxWxC video
+                and returns a transformed version.
+            image_transform (callable, optional): A function/transform that  takes in a CxHxW image
+                and returns a transformed version.
+            audio_format (string): The audio sample format, one of: 'u8', 's16', 's32', 'f32','f64'
+            audio_layout (string, int, optional): The audio channel layout, either an integer number of channels, or
+                audio_layout can be one or several of the following notations,
+                separated by '+' or '|':
+                - the name of an usual channel layout (mono, stereo, 4.0, quad, 5.0,
+                  5.0(side), 5.1, 5.1(side), 7.1, 7.1(wide), downmix);
+                - the name of a single channel (FL, FR, FC, LFE, BL, BR, FLC, FRC, BC,
+                  SL, SR, TC, TFL, TFC, TFR, TBL, TBC, TBR, DL, DR);
+                - a number of channels, in decimal, followed by 'c', yielding
+                  the default channel layout for that number of channels (@see
+                  av_get_default_channel_layout);
+                - a channel layout mask, in hexadecimal starting with "0x" (see the
+                  AV_CH_* macros).
+                Example: "stereo+FC" = "2c+FC" = "2c+1c" = "0x7"
+            audio_sr (int, optional): The sample rate of audio clips in samples per second.
+            audio_cliplen (int, optional): number of samples in a clip
+            audio_transform (callable, optional): A function/transform that takes in a KxL audio tensor
+                and returns a transformed version.
+            text_lang (string, optional): the language of the captions using ISO 639-1. Default "en". 
+            text_transform (callable, optional): A function/transform that takes in a string of text
+                and returns the embedded text as a Tensor of any size.
+
+        Returns:
+            tuple of data fields from dataset filtered by ``fields`` and ``key``. 
+            ``fields`` list items will return data in the following formats:  
+                ``VIDEOID`` (string): The YouTube video ID
+                ``TITLE`` (string): The title of the video 
+                ``DESCRIPTION`` (string): The description of the video 
+                ``TIME`` (float): The presentation time in seconds of the returned data ``key`` 
+                ``DURATION`` (float): The duration of the returned data ``key`` in seconds
+                ``CC_TEXT`` (string): Close Caption Text
+                ``VF_DATA`` (Tensor[H, W, C],Tensor[T, H, W, C]): 'T' Video Frames or single frame
+                ``AF_DATA`` (Tensor[K, L]): Audio Frames where `K` is the number of audio channels, and 'L' is samples
         """
+        
         assert YouTubeDataset.F_VF_DATA in fields or YouTubeDataset.F_TIME in fields, "YouTubeDataset: fields must contain F_VF_DATA and/or F_TIME"     
         assert not download or (download and api_key != None), "YouTubeDataset: download requires api_key from Google API Console with Youtube access" 
         assert not download or (download and (channel_id != None or user_name != None)), "YouTubeDataset: download requires one of channel_id or user_name"
@@ -76,23 +144,47 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         
         self.start = 0
         self.size = self.dataframe.shape[0]
-        self.video_fmt = video_fmt
+        self.video_format = video_format
+        self.video_framerate = video_framerate
         self.video_cliplen = video_cliplen
-        self.audio_fmt = audio_fmt
+        self.audio_format = audio_format
         self.audio_sr = audio_sr
         self.audio_layout = audio_layout
         self.audio_cliplen = audio_cliplen
         
-        if video_stridelen == -1:
+        if video_stridelen == None:
             self.video_stridelen=video_cliplen
         else:
             self.video_stridelen=video_stridelen
 
     def __iter__(self):
         return YTDSIterator(self)
-            
+    
+    @property
+    def fieldnames(self):
+        """Get the list of valid ``fieldnames``.
+        Returns:
+            list: list of valid fieldnames
+        """
+        return [F_VIDEOID, F_TITLE, F_DESCRIPTION, F_TIME, F_DURATION, F_VF_DATA, F_AF_DATA, F_CC_TEXT]
+    
+    @property
+    def max_text_dur(self):
+        """Returns the max duration of the CC_TEXT fields.
+        Returns:
+            float: duration in seconds
+        """
+        return max([dur for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
+                                                             fields=['TIME','DURATION','CC_TEXT'],key='CC_TEXT')])
+
     @staticmethod
     def worker_init(worker_id):
+        """Worker Init Function for DataLoader. See torch.utils.data.DataLoader
+        Args:
+            worker_id (int): The ID of the worker
+        """
+        
+        
         worker_info = torch.utils.data.get_worker_info()
         dataset = worker_info.dataset  # the dataset copy in this worker process
         overall_start = dataset.start
@@ -197,7 +289,7 @@ class YTDSIterator():
         if (container.streams.audio[0].sample_rate != self.dataset.audio_sr or 
             container.streams.audio[0].layout != self.dataset.audio_layout or
             container.streams.audio[0].format != self.dataset.audio_format):
-            self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_fmt, self.dataset.audio_layout, self.dataset.audio_sr)
+            self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_format, self.dataset.audio_layout, self.dataset.audio_sr)
         else:
             self.audio_resampler = None
 
@@ -298,7 +390,7 @@ class YTDSIterator():
                 if self.dataset.video_cliplen == 1:
                     for i in range(stride):
                         vf = next(self.video)
-                    vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_fmt), (2, 0, 1)) # (C, H, W) Image Tensor
+                    vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1)) # (C, H, W) Image Tensor
                     if self.dataset.image_transform:
                         vf_data = self.dataset.image_transform(vf_data)
                     result[YouTubeDataset.F_VF_DATA] = vf_data    
@@ -312,7 +404,7 @@ class YTDSIterator():
                     try:
                         while len(self.vclip) < video_cliplen:
                             vf = next(self.video)
-                            vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_fmt), (2, 0, 1)) # (C, H, W) Image Tensor
+                            vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1)) # (C, H, W) Image Tensor
                             if self.dataset.image_transform:
                                 vf_data = self.dataset.image_transform(vf_data)
                             else:
@@ -323,8 +415,13 @@ class YTDSIterator():
                         if len(self.vclip) == 0:
                             raise StopIteration()            
 
-                    # vf_data = torch.stack([ i[0] for i in self.vclip]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
-                    vf_data = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
+                    if self.dataset.video_framerate != None and self.dataset.video_framerate != self.video_rate:
+                        idx = YTDSIterator._resample_video_idx(len(self.vclip), self.video_rate, self.dataset.video_framerate)
+                        self.vclip = self.vclip[idx]
+
+                    vf_data = torch.stack([ i[0] for i in self.vclip]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
+                    #vf_data = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
+                    
                     if self.dataset.video_transform:
                         vf_data = self.dataset.video_transform(vf_data)
                     result[YouTubeDataset.F_VF_DATA] = vf_data    
@@ -363,7 +460,7 @@ class YTDSIterator():
                         af = self.audio_resampler.resample(af)
                         
                     # get the audio frame as a numpy array and append to aclip
-                    self.aclip.append((torch.from_numpy(af.to_ndarray(format=self.dataset.audio_fmt)), af.time))
+                    self.aclip.append((torch.from_numpy(af.to_ndarray(format=self.dataset.audio_format)), af.time))
                 
                 af_data = torch.cat([ c for c, t in self.aclip],dim=1) # (C,S) - Audio Tensor   
                 
@@ -387,6 +484,18 @@ class YTDSIterator():
         except StopIteration:
             self.next_active()
             return self.__next__()
+        
+    @staticmethod
+    def _resample_video_idx(num_frames, original_fps, new_fps):
+        step = float(original_fps) / new_fps
+        if step.is_integer():
+            # optimization: if step is integer, don't need to perform
+            # advanced indexing
+            step = int(step)
+            return slice(None, None, step)
+        idxs = torch.arange(num_frames, dtype=torch.float32) * step
+        idxs = idxs.floor().to(torch.int64)
+        return idxs
 
         
 def YTDSVideoDownloadThunk(t):
