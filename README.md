@@ -8,7 +8,7 @@ that can download a complete YouTube channel or users videos and cache them and 
 
 git clone https://github.com/secretlocation/YouTubeDataset.git
 cd YouTubeDataset
-python setup.py install
+pip install -e .
 
 
 ## Known Issues
