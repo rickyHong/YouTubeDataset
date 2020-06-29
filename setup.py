@@ -16,11 +16,11 @@ setuptools.setup(
     name="YouTubeDataset", # Replace with your own username
     version="0.0.1",
     author="John Cumming",
-    author_email="johnrcumming@gmail.com",
+    author_email="john@secretlocation.com",
     description="Youtube Channel Dataset Downloader for PyTorch",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/johnrcumming/YouTubeDataset",
+    url="https://github.com/secretlocation/YouTubeDataset",
     packages=setuptools.find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
