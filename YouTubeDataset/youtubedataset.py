@@ -22,6 +22,83 @@ from tqdm import tqdm
 
 
 class YouTubeDataset(torch.utils.data.IterableDataset):
+    """
+    YouTubeDataset is a flexible video dataset creation tool.
+    It allows the downloading of a complete YouTube channel as a dataset.
+
+    Downloading a channel dataset with YouTubeDataset is easy, set the ``download`` flag to True, 
+    and set ``api_key`` to a Google Cloud Platform API Key with rights for the YouTube Data API V3, 
+    and the YouTube ``channel_id``. The download will start automatically, and cache the dataset
+    locally in ``root_dir``/``channel``.
+
+    To use the dataset, set the `fields` parameter to a list of fields that will be extracted
+    from the dataset and presented by the iterator, and the ``key`` parameter to what key field is.
+
+    ``fields`` is a list of one or more of the following ``fieldnames``:
+
+
+    ``key`` refers to the dataset key field. The key field determines the length of all the
+    other dataset fields.
+    If ``key`` is ``VF_DATA``, then the duration of ``AF_AUDIO`` and ``CC_TEXT`` fields are 
+    determined by the ``video_cliplen`` which is the number of frames to present. 
+    If ``video_cliplen`` is 1 then ``VF_DATA`` frames are presented as TorchVision 
+    image tensors Tensor[H, W, C], otherwise they are presented as TorchVision 
+    video tensors Tensor[T, H, W, C].
+
+    If using ``CC_TEXT`` as the key, you will need to get the max text duration from the ``max_text_dur`` property,
+    and pad the data to the max duration in the video_transform and audio_transform.
+
+
+    Args:
+        root_dir (string): Root directory of the YouTube Dataset.
+        channel (string):  Name to identify dataset locally
+        split (string): The split to present - splits are determined by ``splits`` dictionary
+        fields (list, optional): A list of ``fieldnames`` representing the data fields presented by the iterator
+        key (string, optional): The key field's ``fieldname``
+        video_format (string, optional): The video pixel format one of: 'yuv420p','rgb24', 'rgba'
+        video_framerate (int, optional): if specified, it will resample the video
+            so that it has `frame_rate`, and then the clips will be defined on the resampled video
+        video_cliplen (int, optional): number of frames in a clip
+        video_stridelen (int, optional): number of frames between each clip
+        video_transform (callable, optional): A function/transform that  takes in a TxHxWxC video
+            and returns a transformed version.
+        image_transform (callable, optional): A function/transform that  takes in a CxHxW image
+            and returns a transformed version.
+        audio_format (string): The audio sample format, one of: 'u8', 's16', 's32', 'f32','f64'
+        audio_layout (string, int, optional): The audio channel layout, either an integer number of channels, or
+            audio_layout can be one or several of the following notations,
+            separated by '+' or '|':
+            - the name of an usual channel layout (mono, stereo, 4.0, quad, 5.0,
+              5.0(side), 5.1, 5.1(side), 7.1, 7.1(wide), downmix);
+            - the name of a single channel (FL, FR, FC, LFE, BL, BR, FLC, FRC, BC,
+              SL, SR, TC, TFL, TFC, TFR, TBL, TBC, TBR, DL, DR);
+            - a number of channels, in decimal, followed by 'c', yielding
+              the default channel layout for that number of channels (@see
+              av_get_default_channel_layout);
+            - a channel layout mask, in hexadecimal starting with "0x" (see the
+              AV_CH_* macros).
+            Example: "stereo+FC" = "2c+FC" = "2c+1c" = "0x7"
+        audio_sr (int, optional): The sample rate of audio clips in samples per second.
+        audio_cliplen (int, optional): number of samples in a clip
+        audio_transform (callable, optional): A function/transform that takes in a KxL audio tensor
+            and returns a transformed version.
+        text_lang (string, optional): the language of the captions using ISO 639-1. Default "en". 
+        text_transform (callable, optional): A function/transform that takes in a string of text
+            and returns the embedded text as a Tensor of any size.
+
+    Returns:
+        tuple of data fields from dataset filtered by ``fields`` and ``key``. 
+        ``fields`` list items will return data in the following formats:  
+            ``VIDEOID`` (string): The YouTube video ID
+            ``TITLE`` (string): The title of the video 
+            ``DESCRIPTION`` (string): The description of the video 
+            ``TIME`` (float): The presentation time in seconds of the returned data ``key`` 
+            ``DURATION`` (float): The duration of the returned data ``key`` in seconds
+            ``CC_TEXT`` (string): Close Caption Text
+            ``VF_DATA`` (Tensor[H, W, C],Tensor[T, H, W, C]): 'T' Video Frames or single frame
+            ``AF_DATA`` (Tensor[K, L]): Audio Frames where `K` is the number of audio channels, and 'L' is samples
+    """
+        
     F_VIDEOID = 'VIDEOID'
     F_TITLE = 'TITLE'
     F_DESCRIPTION = 'DESCRIPTION'
@@ -37,82 +114,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
                  audio_format='s16', audio_layout='mono', audio_sr=44100,  audio_cliplen=-1, audio_transform=None,
                  text_lang='en', text_transform=None,
                  download=False, api_key=None, channel_id=None, user_name=None, splits={'train':0.80, 'test':0.20}):
-        """
-        YouTubeDataset is a flexible video dataset creation tool.
-        It allows the downloading of a complete YouTube channel as a dataset.
-        
-        Downloading a channel dataset with YouTubeDataset is easy, set the ``download`` flag to True, 
-        and set ``api_key`` to a Google Cloud Platform API Key with rights for the YouTube Data API V3, 
-        and the YouTube ``channel_id``. The download will start automatically, and cache the dataset
-        locally in ``root_dir``/``channel``.
-        
-        To use the dataset, set the `fields` parameter to a list of fields that will be extracted
-        from the dataset and presented by the iterator, and the ``key`` parameter to what key field is.
-        
-        ``fields`` is a list of one or more of the following ``fieldnames``:
-        
-        
-        ``key`` refers to the dataset key field. The key field determines the length of all the
-        other dataset fields.
-        If ``key`` is ``VF_DATA``, then the duration of ``AF_AUDIO`` and ``CC_TEXT`` fields are 
-        determined by the ``video_cliplen`` which is the number of frames to present. 
-        If ``video_cliplen`` is 1 then ``VF_DATA`` frames are presented as TorchVision 
-        image tensors Tensor[H, W, C], otherwise they are presented as TorchVision 
-        video tensors Tensor[T, H, W, C].
-        
-        If using ``CC_TEXT`` as the key, you will need to get the max text duration from the ``max_text_dur`` property,
-        and pad the data to the max duration in the video_transform and audio_transform.
-        
-        
-        Args:
-            root_dir (string): Root directory of the YouTube Dataset.
-            channel (string):  Name to identify dataset locally
-            split (string): The split to present - splits are determined by ``splits`` dictionary
-            fields (list, optional): A list of ``fieldnames`` representing the data fields presented by the iterator
-            key (string, optional): The key field's ``fieldname``
-            video_format (string, optional): The video pixel format one of: 'yuv420p','rgb24', 'rgba'
-            video_framerate (int, optional): if specified, it will resample the video
-                so that it has `frame_rate`, and then the clips will be defined on the resampled video
-            video_cliplen (int, optional): number of frames in a clip
-            video_stridelen (int, optional): number of frames between each clip
-            video_transform (callable, optional): A function/transform that  takes in a TxHxWxC video
-                and returns a transformed version.
-            image_transform (callable, optional): A function/transform that  takes in a CxHxW image
-                and returns a transformed version.
-            audio_format (string): The audio sample format, one of: 'u8', 's16', 's32', 'f32','f64'
-            audio_layout (string, int, optional): The audio channel layout, either an integer number of channels, or
-                audio_layout can be one or several of the following notations,
-                separated by '+' or '|':
-                - the name of an usual channel layout (mono, stereo, 4.0, quad, 5.0,
-                  5.0(side), 5.1, 5.1(side), 7.1, 7.1(wide), downmix);
-                - the name of a single channel (FL, FR, FC, LFE, BL, BR, FLC, FRC, BC,
-                  SL, SR, TC, TFL, TFC, TFR, TBL, TBC, TBR, DL, DR);
-                - a number of channels, in decimal, followed by 'c', yielding
-                  the default channel layout for that number of channels (@see
-                  av_get_default_channel_layout);
-                - a channel layout mask, in hexadecimal starting with "0x" (see the
-                  AV_CH_* macros).
-                Example: "stereo+FC" = "2c+FC" = "2c+1c" = "0x7"
-            audio_sr (int, optional): The sample rate of audio clips in samples per second.
-            audio_cliplen (int, optional): number of samples in a clip
-            audio_transform (callable, optional): A function/transform that takes in a KxL audio tensor
-                and returns a transformed version.
-            text_lang (string, optional): the language of the captions using ISO 639-1. Default "en". 
-            text_transform (callable, optional): A function/transform that takes in a string of text
-                and returns the embedded text as a Tensor of any size.
 
-        Returns:
-            tuple of data fields from dataset filtered by ``fields`` and ``key``. 
-            ``fields`` list items will return data in the following formats:  
-                ``VIDEOID`` (string): The YouTube video ID
-                ``TITLE`` (string): The title of the video 
-                ``DESCRIPTION`` (string): The description of the video 
-                ``TIME`` (float): The presentation time in seconds of the returned data ``key`` 
-                ``DURATION`` (float): The duration of the returned data ``key`` in seconds
-                ``CC_TEXT`` (string): Close Caption Text
-                ``VF_DATA`` (Tensor[H, W, C],Tensor[T, H, W, C]): 'T' Video Frames or single frame
-                ``AF_DATA`` (Tensor[K, L]): Audio Frames where `K` is the number of audio channels, and 'L' is samples
-        """
         
         assert YouTubeDataset.F_VF_DATA in fields or YouTubeDataset.F_TIME in fields, "YouTubeDataset: fields must contain F_VF_DATA and/or F_TIME"     
         assert not download or (download and api_key != None), "YouTubeDataset: download requires api_key from Google API Console with Youtube access" 
@@ -623,8 +625,12 @@ class YouTubeDatasetDownloader():
                         caption_file.write(caption.xml_captions)
                 else:
                     drops.append(ix)
-
-            except:
+            
+            except OSError as ex:
+                raise ex
+                
+            except Exception as ex:
+                print('pytube3 incompatibility, upgrade pytube3 to download: ' + url, 'Exception: ' + str(ex.__class__.__name__) + ', '+ str(ex))
                 drops.append(ix)
 
             self.pbar.update()
