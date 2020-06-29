@@ -133,4 +133,4 @@ and pad the data to the max duration in the video_transform and audio_transform.
         
         
 ## License
-PyTorch is MIT-style licensed, as found in the LICENSE file.
+YouTubeDataset is MIT-style licensed, as found in the LICENSE file.
