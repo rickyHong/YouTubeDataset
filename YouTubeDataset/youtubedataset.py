@@ -64,7 +64,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
             and returns a transformed version.
         image_transform (callable, optional): A function/transform that  takes in a CxHxW image
             and returns a transformed version.
-        audio_format (string): The audio sample format, one of: 'u8', 's16', 's32', 'f32','f64'
+        audio_format (string): The audio sample format, one of: 'u8', 's16', 's32', 'flt','dbl'
         audio_layout (string, int, optional): The audio channel layout, either an integer number of channels, or
             audio_layout can be one or several of the following notations,
             separated by '+' or '|':
@@ -465,7 +465,6 @@ class YTDSIterator():
                 af_data = torch.cat([ c for c, t in self.aclip],dim=1) # (C,S) - Audio Tensor   
                 
                 self.aclip = [ (af_data[:,:audio_cliplen], self.aclip[0][1])]
-                self
                 # reshape aclip to make first segment audio_cliplen in size
                 if af_data.shape[-1] > audio_cliplen: 
                     self.aclip.append((af_data[:,audio_cliplen:], self.aclip_time + audio_cliplen / self.dataset.audio_sr))
