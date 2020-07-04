@@ -59,7 +59,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         video_framerate (int, optional): if specified, it will resample the video
             so that it has `frame_rate`, and then the clips will be defined on the resampled video
         video_cliplen (int, optional): number of frames in a clip
-        video_stridelen (int, optional): number of frames between each clip
+        video_stridelen (int, tuple, optional): number of frames between each clip, if tuple a range for the stride (1,199) random between 1 and 199
         video_transform (callable, optional): A function/transform that  takes in a TxHxWxC video
             and returns a transformed version.
         image_transform (callable, optional): A function/transform that  takes in a CxHxW image
