@@ -392,7 +392,7 @@ class YTDSIterator():
                 if self.dataset.video_cliplen == 1:
                     for i in range(stride):
                         vf = next(self.video)
-                    vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1)) # (C, H, W) Image Tensor
+                    vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
                     if self.dataset.image_transform:
                         vf_data = self.dataset.image_transform(vf_data)
                     result[YouTubeDataset.F_VF_DATA] = vf_data    
@@ -406,11 +406,9 @@ class YTDSIterator():
                     try:
                         while len(self.vclip) < video_cliplen:
                             vf = next(self.video)
-                            vf_data = np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1)) # (C, H, W) Image Tensor
+                            vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
                             if self.dataset.image_transform:
                                 vf_data = self.dataset.image_transform(vf_data)
-                            else:
-                                vf_data = torch.from_numpy(vf_data)
                             self.vclip.append((vf_data, vf.time))
 
                     except StopIteration:
