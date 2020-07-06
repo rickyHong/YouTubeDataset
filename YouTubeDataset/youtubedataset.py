@@ -7,6 +7,7 @@ import random
 from multiprocessing import Pool
 
 import torch
+
 import numpy as np
 import pandas as pd
 
@@ -39,12 +40,9 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
 
     ``key`` refers to the dataset key field. The key field determines the length of all the
     other dataset fields.
-    If ``key`` is ``VF_DATA``, then the duration of ``AF_AUDIO`` and ``CC_TEXT`` fields are 
+    If ``key`` is ``VIDEO``, then the duration of ``AUDIO`` and ``TEXT`` fields are 
     determined by the ``video_cliplen`` which is the number of frames to present. 
-    If ``video_cliplen`` is 1 then ``VF_DATA`` frames are presented as TorchVision 
-    image tensors Tensor[H, W, C], otherwise they are presented as TorchVision 
-    video tensors Tensor[T, H, W, C].
-
+    
     If using ``CC_TEXT`` as the key, you will need to get the max text duration from the ``max_text_dur`` property,
     and pad the data to the max duration in the video_transform and audio_transform.
 
@@ -95,7 +93,8 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
             ``TIME`` (float): The presentation time in seconds of the returned data ``key`` 
             ``DURATION`` (float): The duration of the returned data ``key`` in seconds
             ``CC_TEXT`` (string): Close Caption Text
-            ``VF_DATA`` (Tensor[H, W, C],Tensor[T, H, W, C]): 'T' Video Frames or single frame
+            ``IF_DATA`` (Tensor[C, H, W]): Image Tensor 'H' - Height, 'W' - Width, 'C' Channels
+            ``VF_DATA`` (Tensor[T, H, W, C]): 'T' Video Frames or single frame
             ``AF_DATA`` (Tensor[K, L]): Audio Frames where `K` is the number of audio channels, and 'L' is samples
     """
         
@@ -104,14 +103,15 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
     F_DESCRIPTION = 'DESCRIPTION'
     F_TIME = 'TIME'
     F_DURATION = 'DURATION'
-    F_VF_DATA = 'VF_DATA'
-    F_AF_DATA = 'AF_DATA'
-    F_CC_TEXT = 'CC_TEXT'
+    F_VF_DATA = 'VIDEO'
+    F_IF_DATA = 'IMAGE'
+    F_AF_DATA = 'AUDIO'
+    F_CC_TEXT = 'TEXT'
 
     
-    def __init__(self, root_dir, channel, split='train', fields=[F_VF_DATA,F_TIME], key=F_VF_DATA,
-                 video_format='rgb24', video_framerate=None, video_cliplen=1, video_stridelen=None, image_transform=None, video_transform=None,
-                 audio_format='s16', audio_layout='mono', audio_sr=44100,  audio_cliplen=-1, audio_transform=None,
+    def __init__(self, root_dir, channel, split='train', fields=['IMAGE','TIME'], key='IMAGE',
+                 video_format='rgb24', video_framerate=None, video_cliplen=None, video_stridelen=None, image_transform=None, video_transform=None,
+                 audio_format='flt', audio_layout='mono', audio_sr=16000,  audio_cliplen=None, audio_transform=None,
                  text_lang='en', text_transform=None,
                  download=False, api_key=None, channel_id=None, user_name=None, splits={'train':0.80, 'test':0.20}):
 
@@ -120,8 +120,8 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         assert not download or (download and api_key != None), "YouTubeDataset: download requires api_key from Google API Console with Youtube access" 
         assert not download or (download and (channel_id != None or user_name != None)), "YouTubeDataset: download requires one of channel_id or user_name"
         assert key in fields, "YouTubeDataset: key must be in fields"
-        assert (key == YouTubeDataset.F_VF_DATA and video_cliplen != -1) or True, "YouTubeDataset: video_cliplen must be 1 or greater if key is 'VF_DATA'"
-        assert (key == YouTubeDataset.F_AF_DATA and audio_cliplen != -1) or True, "YouTubeDataset: audio_cliplen must be 1 or greater if key is 'AF_DATA'"
+        assert (key == YouTubeDataset.F_VF_DATA and video_cliplen > 1) or True, "YouTubeDataset: video_cliplen must be 1 or greater if key is 'VIDEO'"
+        assert (key == YouTubeDataset.F_AF_DATA and audio_cliplen > 1) or True, "YouTubeDataset: audio_cliplen must be 1 or greater if key is 'AUDIO'"
 
         if download:
             dl = YouTubeDatasetDownloader(root_dir, channel, splits, api_key, caption_lang=text_lang, channel_id=channel_id, user_name=user_name)
@@ -149,15 +149,11 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         self.video_format = video_format
         self.video_framerate = video_framerate
         self.video_cliplen = video_cliplen
+        self.video_stridelen=video_stridelen
         self.audio_format = audio_format
         self.audio_sr = audio_sr
         self.audio_layout = audio_layout
         self.audio_cliplen = audio_cliplen
-        
-        if video_stridelen == None:
-            self.video_stridelen=video_cliplen
-        else:
-            self.video_stridelen=video_stridelen
 
     def __iter__(self):
         return YTDSIterator(self)
@@ -168,17 +164,40 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         Returns:
             list: list of valid fieldnames
         """
-        return [F_VIDEOID, F_TITLE, F_DESCRIPTION, F_TIME, F_DURATION, F_VF_DATA, F_AF_DATA, F_CC_TEXT]
+        return [YouTubeDataset.F_VIDEOID, YouTubeDataset.F_TITLE, YouTubeDataset.F_DESCRIPTION, YouTubeDataset.F_TIME, 
+                YouTubeDataset.F_DURATION, YouTubeDataset.F_VF_DATA, YouTubeDataset.F_IF_DATA, YouTubeDataset.F_AF_DATA, 
+                YouTubeDataset.F_CC_TEXT]
     
     @property
     def max_text_dur(self):
-        """Returns the max duration of the CC_TEXT fields.
+        """Returns the max duration of the TEXT fields.
         Returns:
             float: duration in seconds
         """
         return max([dur for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
-                                                             fields=['TIME','DURATION','CC_TEXT'],key='CC_TEXT')])
+                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
+                                                             key=YouTubeDataset.F_CC_TEXT)])
 
+    @property
+    def max_text_len(self):
+        """Returns the max length of the TEXT fields in chars.
+        Returns:
+            int: length in characters
+        """
+        return max([len(text) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
+                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
+                                                             key=YouTubeDataset.F_CC_TEXT)])
+    
+    def max_text_tokens(self,  tokenizer):
+        """Returns the max number of tokens in the TEXT fields, using the specified totchtext tokenizer
+        Returns:
+            int: length in tokens
+        """
+        return max([len(tokenizer(text)) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
+                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
+                                                             key=YouTubeDataset.F_CC_TEXT)])
+    
+    
     @staticmethod
     def worker_init(worker_id):
         """Worker Init Function for DataLoader. See torch.utils.data.DataLoader
@@ -336,6 +355,10 @@ class YTDSIterator():
                 clip_duration = self.dataset.video_cliplen / self.video_rate
                 clip_time = self.vclip_time
             
+            if self.dataset.key == YouTubeDataset.F_IF_DATA:
+                clip_duration = 1. / self.video_rate
+                clip_time = self.vclip_time
+
             if self.dataset.key == YouTubeDataset.F_AF_DATA:
                 clip_duration = self.dataset.audio_cliplen / self.dataset.audio_sr
                 clip_time = self.aclip_time
@@ -381,63 +404,79 @@ class YTDSIterator():
                 result[YouTubeDataset.F_CC_TEXT] = cc_text
 
 
-            if YouTubeDataset.F_VF_DATA in self.dataset.fields or YouTubeDataset.F_TIME in self.dataset.fields:                        
-                        
-                if isinstance(self.dataset.video_stridelen, tuple):
+            if YouTubeDataset.F_VF_DATA in self.dataset.fields:                        
+                # get the video segment
+                if self.dataset.video_cliplen is None:
+                    video_cliplen = int(clip_duration * self.video_rate)
+                else:
+                    video_cliplen = self.dataset.video_cliplen
+
+                if self.dataset.video_stridelen is None:
+                    stride = video_cliplen
+                elif isinstance(self.dataset.video_stridelen, tuple):
                     stride = random.randint(*self.dataset.video_stridelen)
                 else:
                     stride = self.dataset.video_stridelen
 
-                # get the video frame or segment
-                if self.dataset.video_cliplen == 1:
-                    for i in range(stride):
+                try:
+                    while len(self.vclip) < video_cliplen:
                         vf = next(self.video)
-                    vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
-                    if self.dataset.image_transform:
-                        vf_data = self.dataset.image_transform(vf_data)
-                    result[YouTubeDataset.F_VF_DATA] = vf_data    
-                    self.vclip_time = vf.time
-                else:
-                    if self.dataset.video_cliplen == -1:
-                        video_cliplen = int(clip_duration * self.video_rate)
-                    else:
-                        video_cliplen = self.dataset.video_cliplen
-                    
-                    try:
-                        while len(self.vclip) < video_cliplen:
-                            vf = next(self.video)
-                            vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
-                            if self.dataset.image_transform:
-                                vf_data = self.dataset.image_transform(vf_data)
-                            self.vclip.append((vf_data, vf.time))
+                        vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
+                        if self.dataset.image_transform:
+                            vf_data = self.dataset.image_transform(vf_data)
+                        self.vclip.append((vf_data, vf.time))
 
-                    except StopIteration:
-                        if len(self.vclip) == 0:
-                            raise StopIteration()            
+                except StopIteration:
+                    if len(self.vclip) == 0:
+                        raise StopIteration()            
 
-                    if self.dataset.video_framerate != None and self.dataset.video_framerate != self.video_rate:
-                        idx = YTDSIterator._resample_video_idx(len(self.vclip), self.video_rate, self.dataset.video_framerate)
-                        self.vclip = self.vclip[idx]
+                if self.dataset.video_framerate != None and self.dataset.video_framerate != self.video_rate:
+                    idx = YTDSIterator._resample_video_idx(len(self.vclip), self.video_rate, self.dataset.video_framerate)
+                    self.vclip = self.vclip[idx]
 
-                    vf_data = torch.stack([ i[0] for i in self.vclip]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
-                    #vf_data = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
-                    
-                    if self.dataset.video_transform:
-                        vf_data = self.dataset.video_transform(vf_data)
-                    result[YouTubeDataset.F_VF_DATA] = vf_data    
+                #vf_data = torch.stack([ i[0] for i in self.vclip]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
+                vf_data = torch.stack([ i[0] for i in self.vclip]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
+                #vf_data = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
 
-                    self.vclip_time = self.vclip[0][1]
+                if self.dataset.video_transform:
+                    vf_data = self.dataset.video_transform(vf_data)
+                result[YouTubeDataset.F_VF_DATA] = vf_data    
 
-                    self.vclip = self.vclip[stride:]
+                self.vclip_time = self.vclip[0][1]
+
+                self.vclip = self.vclip[stride:]
                     
                 if self.dataset.key == YouTubeDataset.F_VF_DATA:
                     result[YouTubeDataset.F_TIME] = clip_time = self.vclip_time
                     result[YouTubeDataset.F_DURATION] = clip_duration
 
 
+            if YouTubeDataset.F_IF_DATA in self.dataset.fields:                        
+                    
+                if self.dataset.video_stridelen is None:
+                    stride = 1
+                elif isinstance(self.dataset.video_stridelen, tuple):
+                    stride = random.randint(*self.dataset.video_stridelen)
+                else:
+                    stride = self.dataset.video_stridelen
+
+                # get the video frame or segment
+                for i in range(stride):
+                    vf = next(self.video)
+                vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
+                if self.dataset.image_transform:
+                    vf_data = self.dataset.image_transform(vf_data)
+                result[YouTubeDataset.F_IF_DATA] = vf_data    
+                self.vclip_time = vf.time
+                    
+                if self.dataset.key == YouTubeDataset.F_IF_DATA:
+                    result[YouTubeDataset.F_TIME] = clip_time = self.vclip_time
+                    result[YouTubeDataset.F_DURATION] = clip_duration
+                    
+                    
             if YouTubeDataset.F_AF_DATA in self.dataset.fields:
                 
-                if self.dataset.audio_cliplen == -1:
+                if self.dataset.audio_cliplen is None:
                     audio_cliplen = int(clip_duration * self.dataset.audio_sr)
                 else:
                     audio_cliplen = self.dataset.audio_cliplen
