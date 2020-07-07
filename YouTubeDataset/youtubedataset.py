@@ -450,8 +450,16 @@ class YTDSIterator():
                         raise StopIteration()            
 
                 if self.dataset.video_framerate != None and self.dataset.video_framerate != self.video_rate:
-                    idx = YTDSIterator._resample_video_idx(len(self.vclip), self.video_rate, self.dataset.video_framerate)
-                    self.vclip = self.vclip[idx]
+                    print('len(self.vclip)', len(self.vclip))
+                    print('self.video_rate', self.video_rate)
+                    print('self.dataset.video_framerate', self.dataset.video_framerate)
+                    num_frames = len(self.vclip) * self.dataset.video_framerate // self.video_rate
+                    print('num_frames', num_frames)
+
+                    idx = YTDSIterator._resample_video_idx(num_frames, self.video_rate, self.dataset.video_framerate)
+                    print('len(idx)', len(idx))
+                    print('idx', idx)
+                    self.vclip = [ self.vclip[i] for i in idx ]
 
                 #vf_data = torch.stack([ i[0] for i in self.vclip]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
                 vf_data = torch.stack([ i[0] for i in self.vclip]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
