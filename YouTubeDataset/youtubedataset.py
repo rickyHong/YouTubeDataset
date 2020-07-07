@@ -154,6 +154,8 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         self.audio_sr = audio_sr
         self.audio_layout = audio_layout
         self.audio_cliplen = audio_cliplen
+        
+        self.raw_text_cache = None
 
     def __iter__(self):
         return YTDSIterator(self)
@@ -168,15 +170,27 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
                 YouTubeDataset.F_DURATION, YouTubeDataset.F_VF_DATA, YouTubeDataset.F_IF_DATA, YouTubeDataset.F_AF_DATA, 
                 YouTubeDataset.F_CC_TEXT]
     
+
+    @property
+    def raw_text(self):
+        """Returns the raw TEXT of the dataset as a list
+        Returns:
+            list: [(TIME, DURATION, TEXT) ...] the Caption portion of the dataset
+        """
+        if self.raw_text_cache == None:
+            self.raw_text_cache = [ (pts, dur, text) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
+                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
+                                                             key=YouTubeDataset.F_CC_TEXT) ]
+        return self.raw_text_cache
+    
     @property
     def max_text_dur(self):
         """Returns the max duration of the TEXT fields.
         Returns:
             float: duration in seconds
         """
-        return max([dur for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
-                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
-                                                             key=YouTubeDataset.F_CC_TEXT)])
+        
+        return max([dur for pts, dur, text in self.raw_text])
 
     @property
     def max_text_len(self):
@@ -184,19 +198,14 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         Returns:
             int: length in characters
         """
-        return max([len(text) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
-                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
-                                                             key=YouTubeDataset.F_CC_TEXT)])
+        return max([len(text) for pts, dur, text in self.raw_text])
     
     def max_text_tokens(self,  tokenizer):
         """Returns the max number of tokens in the TEXT fields, using the specified totchtext tokenizer
         Returns:
             int: length in tokens
         """
-        return max([len(tokenizer(text)) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
-                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
-                                                             key=YouTubeDataset.F_CC_TEXT)])
-    
+        return max([len(tokenizer(text)) for pts, dur, text in self.raw_text])
     
     @staticmethod
     def worker_init(worker_id):
@@ -299,23 +308,33 @@ class YTDSIterator():
         video_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'video', self.video_id + '.mp4')
         caption_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'caption', self.video_id + '.xml')
 
-        # Initialize Video and Audio
-        container = av.open(video_path)
-        self.video = container.decode(video=0)
-        self.video_rate = container.streams.video[0].average_rate
-        
-        container = av.open(video_path)
-        self.audio = container.decode(audio=0)
-
-        if (container.streams.audio[0].sample_rate != self.dataset.audio_sr or 
-            container.streams.audio[0].layout != self.dataset.audio_layout or
-            container.streams.audio[0].format != self.dataset.audio_format):
-            self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_format, self.dataset.audio_layout, self.dataset.audio_sr)
+        # Initialize Video 
+        if (YouTubeDataset.F_VF_DATA in self.dataset.fields or 
+            YouTubeDataset.F_IF_DATA in self.dataset.fields):                        
+            container = av.open(video_path)
+            self.video = container.decode(video=0)
+            self.video_rate = container.streams.video[0].average_rate
         else:
+            self.video = None
+            self.video_rate = 0
+        
+        # Initialize Audio 
+        if (YouTubeDataset.F_AF_DATA in self.dataset.fields):                        
+            container = av.open(video_path)
+            self.audio = container.decode(audio=0)
+            if (container.streams.audio[0].sample_rate != self.dataset.audio_sr or 
+                container.streams.audio[0].layout != self.dataset.audio_layout or
+                container.streams.audio[0].format != self.dataset.audio_format):
+                self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_format, self.dataset.audio_layout, self.dataset.audio_sr)
+            else:
+                self.audio_resampler = None
+        else:
+            self.audio = None
             self.audio_resampler = None
 
         # init captions
-        self.caption = iter(CCFrame.ParseCC(caption_path))
+        if YouTubeDataset.F_CC_TEXT in self.dataset.fields:
+            self.caption = iter(CCFrame.ParseCC(caption_path))
 
         # initialize VideoFrame start
         self.vclip = []
