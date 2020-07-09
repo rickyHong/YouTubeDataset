@@ -438,7 +438,8 @@ class YTDSIterator():
                     stride = self.dataset.video_stridelen
 
                 try:
-                    while len(self.vclip) < video_cliplen:
+                    video_chunklen = 2 * video_cliplen * self.video_rate // self.dataset.video_framerate
+                    while len(self.vclip) < video_chunklen:
                         vf = next(self.video)
                         vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
                         if self.dataset.image_transform:
@@ -446,24 +447,23 @@ class YTDSIterator():
                         self.vclip.append((vf_data, vf.time))
 
                 except StopIteration:
-                    if len(self.vclip) == 0:
-                        raise StopIteration()            
+#                    if len(self.vclip) == 0:
+                    raise StopIteration()            
 
                 if self.dataset.video_framerate != None and self.dataset.video_framerate != self.video_rate:
-                    print('len(self.vclip)', len(self.vclip))
-                    print('self.video_rate', self.video_rate)
-                    print('self.dataset.video_framerate', self.dataset.video_framerate)
+                    stride = stride * self.video_rate // self.dataset.video_framerate 
                     num_frames = len(self.vclip) * self.dataset.video_framerate // self.video_rate
-                    print('num_frames', num_frames)
-
                     idx = YTDSIterator._resample_video_idx(num_frames, self.video_rate, self.dataset.video_framerate)
-                    print('len(idx)', len(idx))
-                    print('idx', idx)
-                    self.vclip = [ self.vclip[i] for i in idx ]
-
-                #vf_data = torch.stack([ i[0] for i in self.vclip]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
-                vf_data = torch.stack([ i[0] for i in self.vclip]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
-                #vf_data = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
+                    if isinstance(idx, slice):
+                        vclip = self.vclip[idx]
+                    else:
+                        vclip = [ self.vclip[i] for i in idx ]
+                else:
+                    vclip = self.vclip
+                    
+                #vf_data = torch.stack([ i[0] for i in vclip[:video_cliplen]]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
+                vf_data = torch.stack([ i[0] for i in vclip[:video_cliplen]]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
+                #vf_data = torch.stack([ i[0] for i in vclip[:video_cliplen]]) # (T,C,H,W) - Video Tensor   
 
                 if self.dataset.video_transform:
                     vf_data = self.dataset.video_transform(vf_data)
