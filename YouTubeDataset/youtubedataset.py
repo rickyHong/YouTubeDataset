@@ -438,7 +438,11 @@ class YTDSIterator():
                     stride = self.dataset.video_stridelen
 
                 try:
-                    video_chunklen = 2 * video_cliplen * self.video_rate // self.dataset.video_framerate
+                    if self.dataset.video_framerate == None:
+                        video_chunklen = max(stride,video_cliplen) + 1
+                    else:
+                        video_chunklen = max(stride,video_cliplen * self.video_rate // self.dataset.video_framerate) + 1
+
                     while len(self.vclip) < video_chunklen:
                         vf = next(self.video)
                         vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
