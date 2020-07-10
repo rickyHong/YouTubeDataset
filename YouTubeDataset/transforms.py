@@ -6,7 +6,7 @@ class Denormalize(object):
         self.std = std
     def __call__(self, tensor):
         """
-        Args:
+        Parameters:
             tensor (Tensor): Tensor image of size (C, H, W) to be normalized.
         Returns:
             Tensor: Normalized image.
@@ -23,7 +23,7 @@ class Mosaicise(object):
     
     def __call__(self, rgb):
         """
-        Args:
+        Parameters:
             rgb (Tensor): Tensor image of size (C, H, W)
         Returns:
             Tensor:  Mosaicized tensor of size (1, H*scale, W*scale) bayer image.
@@ -57,7 +57,7 @@ class Demosaicise(object):
     
     def __call__(self, raw):
         """
-        Args:
+        Parameters:
             raw (Tensor): Tensor image of size (1, H, W) bayer image
         Returns:
             Tensor:  Mosaicized tensor of size (3, H*scale, W*scale) rgb image.

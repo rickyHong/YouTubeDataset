@@ -47,7 +47,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
     and pad the data to the max duration in the video_transform and audio_transform.
 
 
-    Args:
+    Parameters:
         root_dir (string): Root directory of the YouTube Dataset.
         channel (string):  Name to identify dataset locally
         split (string): The split to present - splits are determined by ``splits`` dictionary
@@ -210,7 +210,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
     @staticmethod
     def worker_init(worker_id):
         """Worker Init Function for DataLoader. See torch.utils.data.DataLoader
-        Args:
+        Parameters:
             worker_id (int): The ID of the worker
         """
         
