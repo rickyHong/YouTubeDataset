@@ -357,8 +357,12 @@ class YTDSIterator():
                 YouTubeDataset.F_TITLE: self.title,
                 YouTubeDataset.F_DESCRIPTION: self.description
             }
+        except StopIteration as si:
+            raise si
+            
         except Exception as e:
-            self.next_active()
+            print('Exception', type(e), e.args, e)
+            raise e
         
     def __iter__(self):
         return self
