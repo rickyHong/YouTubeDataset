@@ -79,3 +79,57 @@ class Demosaicise(object):
         
         return rgb
     
+    
+class RgbToYuv(object):
+    def __init__(self):
+        self.basis = torch.tensor([[ 0.29900, -0.16874,  0.50000],
+                       [0.58700, -0.33126, -0.41869],
+                       [ 0.11400, 0.50000, -0.08131]])
+       
+    
+    def __call__(self, rgb):
+        """
+        Parameters:
+            rgb (Tensor): Tensor image of size (3, H, W) rgb image
+        Returns:
+            Tensor:  Tensor of size (3, H, W) YUV image.
+        """
+        yuv = torch.dot(rgb,self.basis)
+        
+        if rgb.dtype == torch.unit8:
+            yuv[:,:,1:]+= 128.0
+            yuv = yuv.to(dtype=torch.uint8)
+        else:
+            yuv[:,:,1:]+= 0.5
+            
+        return yuv
+
+class YuvToRgb(object):
+    def __init__(self):
+        self.basis = torch.tensor([[ 1.0, 1.0, 1.0],
+                 [-0.000007154783816076815, -0.3441331386566162, 1.7720025777816772],
+                 [ 1.4019975662231445, -0.7141380310058594 , 0.00001542569043522235]])
+       
+    
+    def __call__(self, yuv):
+        """
+        Parameters:
+            rgb (Tensor): Tensor image of size (3, H, W) rgb image
+        Returns:
+            Tensor:  Tensor of size (3, H, W) YUV image.
+        """
+        rgb = torch.dot(yuv,self.basis)
+        
+        if yuv.dtype == torch.unit8:
+            rgb[:,:,0]-=179.45477266423404
+            rgb[:,:,1]+=135.45870971679688
+            rgb[:,:,2]-=226.8183044444304
+            rgb = rgb.to(dtype=torch.uint8)
+
+        else:
+            rgb[:,:,0]-=179.45477266423404/255.0
+            rgb[:,:,1]+=135.45870971679688/255.0
+            rgb[:,:,2]-=226.8183044444304/255.0
+            
+        return rgb
+    
