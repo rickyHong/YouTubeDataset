@@ -290,72 +290,75 @@ class YTDSIterator():
         self.next_active()
 
     def next_active(self):
-        # Get The Active Record from the dataset
-        if self.active_ix == -1:
-            self.active_ix = self.dataset.start
-        else:
-            self.active_ix = self.active_ix + 1
-        
-        if self.active_ix >= self.dataset.start + self.dataset.size:
-            raise StopIteration()
-            
-        self.active = self.dataset.dataframe.iloc[self.active_ix]
-
-        self.video_id = self.active['video_id']
-        self.title = self.active['title']  
-        self.description = self.active['description']     
-
-        video_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'video', self.video_id + '.mp4')
-        caption_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'caption', self.video_id + '.xml')
-
-        # Initialize Video 
-        if (YouTubeDataset.F_VF_DATA in self.dataset.fields or 
-            YouTubeDataset.F_IF_DATA in self.dataset.fields):                        
-            container = av.open(video_path)
-            self.video = container.decode(video=0)
-            self.video_rate = container.streams.video[0].average_rate
-        else:
-            self.video = None
-            self.video_rate = 0
-        
-        # Initialize Audio 
-        if (YouTubeDataset.F_AF_DATA in self.dataset.fields):                        
-            container = av.open(video_path)
-            self.audio = container.decode(audio=0)
-            if (container.streams.audio[0].sample_rate != self.dataset.audio_sr or 
-                container.streams.audio[0].layout != self.dataset.audio_layout or
-                container.streams.audio[0].format != self.dataset.audio_format):
-                self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_format, self.dataset.audio_layout, self.dataset.audio_sr)
+        try:
+            # Get The Active Record from the dataset
+            if self.active_ix == -1:
+                self.active_ix = self.dataset.start
             else:
+                self.active_ix = self.active_ix + 1
+
+            if self.active_ix >= self.dataset.start + self.dataset.size:
+                raise StopIteration()
+
+            self.active = self.dataset.dataframe.iloc[self.active_ix]
+
+            self.video_id = self.active['video_id']
+            self.title = self.active['title']  
+            self.description = self.active['description']     
+
+            video_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'video', self.video_id + '.mp4')
+            caption_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'caption', self.video_id + '.xml')
+
+            # Initialize Video 
+            if (YouTubeDataset.F_VF_DATA in self.dataset.fields or 
+                YouTubeDataset.F_IF_DATA in self.dataset.fields):                        
+                container = av.open(video_path)
+                self.video = container.decode(video=0)
+                self.video_rate = container.streams.video[0].average_rate
+            else:
+                self.video = None
+                self.video_rate = 0
+
+            # Initialize Audio 
+            if (YouTubeDataset.F_AF_DATA in self.dataset.fields):                        
+                container = av.open(video_path)
+                self.audio = container.decode(audio=0)
+                if (container.streams.audio[0].sample_rate != self.dataset.audio_sr or 
+                    container.streams.audio[0].layout != self.dataset.audio_layout or
+                    container.streams.audio[0].format != self.dataset.audio_format):
+                    self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_format, 
+                                                                             self.dataset.audio_layout, self.dataset.audio_sr)
+                else:
+                    self.audio_resampler = None
+            else:
+                self.audio = None
                 self.audio_resampler = None
-        else:
-            self.audio = None
-            self.audio_resampler = None
 
-        # init captions
-        if YouTubeDataset.F_CC_TEXT in self.dataset.fields:
-            self.caption = iter(CCFrame.ParseCC(caption_path))
+            # init captions
+            if YouTubeDataset.F_CC_TEXT in self.dataset.fields:
+                self.caption = iter(CCFrame.ParseCC(caption_path))
 
-        # initialize VideoFrame start
-        self.vclip = []
-        self.vclip_time = 0.0
-        
-        # Initialize Audioframe Start
-        self.aclip_time = 0.0
-        self.aclip = []
+            # initialize VideoFrame start
+            self.vclip = []
+            self.vclip_time = 0.0
 
-        # Initialize Caption Start
-        self.cclip_time = 0.0
-        self.cclip_duration = 0.0
-        self.cclip = []
-        
-        # set up the result
-        self.result = {
-            YouTubeDataset.F_VIDEOID: self.video_id,
-            YouTubeDataset.F_TITLE: self.title,
-            YouTubeDataset.F_DESCRIPTION: self.description
-        }
+            # Initialize Audioframe Start
+            self.aclip_time = 0.0
+            self.aclip = []
 
+            # Initialize Caption Start
+            self.cclip_time = 0.0
+            self.cclip_duration = 0.0
+            self.cclip = []
+
+            # set up the result
+            self.result = {
+                YouTubeDataset.F_VIDEOID: self.video_id,
+                YouTubeDataset.F_TITLE: self.title,
+                YouTubeDataset.F_DESCRIPTION: self.description
+            }
+        except Exception as e:
+            self.next_active()
         
     def __iter__(self):
         return self
@@ -371,7 +374,10 @@ class YTDSIterator():
                 clip_time = self.cclip_time
                 
             if self.dataset.key == YouTubeDataset.F_VF_DATA:
-                clip_duration = self.dataset.video_cliplen / self.video_rate
+                if self.dataset.video_framerate == None:
+                    clip_duration = self.dataset.video_cliplen / self.video_rate
+                else:
+                    clip_duration = self.dataset.video_cliplen / self.dataset.video_framerate
                 clip_time = self.vclip_time
             
             if self.dataset.key == YouTubeDataset.F_IF_DATA:
@@ -426,7 +432,10 @@ class YTDSIterator():
             if YouTubeDataset.F_VF_DATA in self.dataset.fields:                        
                 # get the video segment
                 if self.dataset.video_cliplen is None:
-                    video_cliplen = int(clip_duration * self.video_rate)
+                    if self.dataset.video_framerate == None:
+                        video_cliplen = int(clip_duration * self.video_rate)
+                    else:
+                        video_cliplen = int(clip_duration * self.dataset.video_framerate)
                 else:
                     video_cliplen = self.dataset.video_cliplen
 
@@ -441,7 +450,7 @@ class YTDSIterator():
                     if self.dataset.video_framerate == None:
                         video_chunklen = max(stride,video_cliplen) + 1
                     else:
-                        video_chunklen = max(stride,video_cliplen * self.video_rate // self.dataset.video_framerate) + 1
+                        video_chunklen = max(stride,video_cliplen) * self.video_rate // self.dataset.video_framerate + 1
 
                     while len(self.vclip) < video_chunklen:
                         vf = next(self.video)
@@ -473,9 +482,9 @@ class YTDSIterator():
                     vf_data = self.dataset.video_transform(vf_data)
                 result[YouTubeDataset.F_VF_DATA] = vf_data    
 
-                self.vclip_time = self.vclip[0][1]
+                self.vclip_time = vclip[0][1]
 
-                self.vclip = self.vclip[stride:]
+                self.vclip = vclip[stride:]
                     
                 if self.dataset.key == YouTubeDataset.F_VF_DATA:
                     result[YouTubeDataset.F_TIME] = clip_time = self.vclip_time
