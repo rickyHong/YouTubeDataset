@@ -14,7 +14,7 @@ import librosa.display as lrd
 from YouTubeDataset import YouTubeDataset
 
 
-def ipd_display_dataset(o, decoders=None, num_batches=1):
+def ipd_display_dataset(o, decoders=None, num_batches=1, batch=None):
     """Displays a YouTubeDataset on all frontends.
     Parameters:
         o (YoutubeDataset or DataLoader): The YouTubeDataset or Dataloader(YouTubeDataset) to display
@@ -47,7 +47,15 @@ def ipd_display_dataset(o, decoders=None, num_batches=1):
         
         ret = []
         
-        for ix, batch in enumerate(dl):
+        if batch == None:
+            it = iter(enumerate(dl))
+        else:
+            it = None
+            ix = 0
+            
+        while num_batches > 0:
+            num_batches -= 1
+            ix, batch = next(it) if it != None else (ix, batch)
             for k, v in zip(ds.fields, batch):
                 
                 if isinstance(v, torch.Tensor):
