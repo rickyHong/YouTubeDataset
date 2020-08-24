@@ -311,7 +311,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         worker_id = worker_info.id
 
         if overall_size < worker_info.num_workers:
-            raise ValueError('Number of workers must be less than number of videos in split ('+str(overall_size)')')
+            raise ValueError('Number of workers must be less than number of videos in split ('+str(overall_size)+')')
 
         # configure the dataset to only process the split workload
         per_worker = overall_size // worker_info.num_workers
