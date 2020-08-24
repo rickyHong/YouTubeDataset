@@ -232,12 +232,15 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         """
         return max([len(text) for pts, dur, text in self.raw_text])
     
-    def max_text_tokens(self,  tokenizer):
+    def max_text_tokens(self,  tokenizer, vocab=None):
         """Returns the max number of tokens in the TEXT fields, using the specified totchtext tokenizer
         Returns:
             int: length in tokens
         """
-        return max([len(tokenizer(text)) for pts, dur, text in self.raw_text])
+        if vocab is None:
+            return max([len(tokenizer(text)) for pts, dur, text in self.raw_text])
+        else:
+            return max([len([t for t in tokenizer(text) if str(t) in vocab.stoi]) for pts, dur, text in self.raw_text])
     
     @staticmethod    
     def build_vocab(root_dir, channel, vocab='vocab.txt', language="en", pretrained="fasttext.en.300d", pos=None, lemmatize=False):
@@ -301,18 +304,19 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         Parameters:
             worker_id (int): The ID of the worker
         """
-        
-        
         worker_info = torch.utils.data.get_worker_info()
         dataset = worker_info.dataset  # the dataset copy in this worker process
         overall_start = dataset.start
         overall_size = dataset.size
-        # configure the dataset to only process the split workload
-        per_worker = int(math.ceil(overall_size / float(worker_info.num_workers)))
         worker_id = worker_info.id
+
+        if overall_size < worker_info.num_workers:
+            raise ValueError('Number of workers must be less than number of videos in split ('+str(overall_size)')')
+
+        # configure the dataset to only process the split workload
+        per_worker = overall_size // worker_info.num_workers
         dataset.start = overall_start + worker_id * per_worker
         dataset.size = min(per_worker, overall_size - dataset.start) 
-        
 
 
 class CCFrame():
