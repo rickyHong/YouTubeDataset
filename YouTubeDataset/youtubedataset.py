@@ -683,7 +683,7 @@ def YTDSVideoDownloadThunk(t):
 
 class YouTubeDatasetDownloader():
     def __init__(self, root_dir, channel, splits, api_key, 
-                 channel_id=None, user_name=None, caption_lang="en", youtube_url = 'http://youtube.com/watch?v='):
+                 channel_id=None, user_name=None, caption_lang="en", types=['VIDEO', 'CAPTION'], youtube_url = 'http://youtube.com/watch?v='):
     
         assert channel_id != None or user_name != None, "channel_id or user_name must be specified" 
 
@@ -698,16 +698,18 @@ class YouTubeDatasetDownloader():
         self.splits = splits
         self.youtube_url = youtube_url
         self.caption_lang = caption_lang
-        
+        self.types=types
         
         self.channel_path = os.path.join(root_dir, channel)
         os.makedirs(self.channel_path, exist_ok=True)
 
-        self.video_path = os.path.join(self.channel_path, 'video')
-        self.caption_path = os.path.join(self.channel_path, 'caption')
+        if 'VIDEO' in self.types:
+            self.video_path = os.path.join(self.channel_path, 'video')
+            os.makedirs(self.video_path, exist_ok=True)
 
-        os.makedirs(self.video_path, exist_ok=True)
-        os.makedirs(self.caption_path, exist_ok=True)
+        if 'CAPTION' in self.types:    
+            self.caption_path = os.path.join(self.channel_path, 'caption')
+            os.makedirs(self.caption_path, exist_ok=True)
 
 
 
@@ -749,7 +751,7 @@ class YouTubeDatasetDownloader():
     def videos(self, playlist_ids):
         videos = []
 
-        for playlist_id, playlist_size in playlist_ids:
+        for playlist_id, playlist_size in tqdm(playlist_ids):
             nextPageToken=''
             while True:
                 pli = self.ytapi.get('playlistItems', part='snippet,contentDetails', playlistId=playlist_id, pageToken=nextPageToken) 
@@ -793,13 +795,16 @@ class YouTubeDatasetDownloader():
 
                 if yt.captions[self.caption_lang] != None:
                     #TODO: Download at a specific resolution - currently highest
-                    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').asc().first()
-                    video_filename = video_id #+ '.mp4' 
-                    stream.download(output_path=self.video_path, filename=video_filename)
-                    caption = yt.captions[self.caption_lang]
-                    caption_filename = os.path.join(self.caption_path, video_id + ".xml")
-                    with open(caption_filename, "w") as caption_file:
-                        caption_file.write(caption.xml_captions)
+                    if 'VIDEO' in self.types:
+                        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').asc().first()
+                        video_filename = video_id #+ '.mp4' 
+                        stream.download(output_path=self.video_path, filename=video_filename)
+                    
+                    if 'CAPTION' in self.types:
+                        caption = yt.captions[self.caption_lang]
+                        caption_filename = os.path.join(self.caption_path, video_id + ".xml")
+                        with open(caption_filename, "w") as caption_file:
+                            caption_file.write(caption.xml_captions)
                 else:
                     drops.append(ix)
             
