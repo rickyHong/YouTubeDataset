@@ -4,9 +4,12 @@ import warnings
 import math
 import os
 import random
+from collections import Counter
+
 from multiprocessing import Pool
 
 import torch
+import torchtext
 
 import numpy as np
 import pandas as pd
@@ -16,6 +19,7 @@ import av
 import lxml, lxml.html
 import html
 
+import spacy
 import youtube
 import pytube
 
@@ -47,7 +51,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
     and pad the data to the max duration in the video_transform and audio_transform.
 
 
-    Args:
+    Parameters:
         root_dir (string): Root directory of the YouTube Dataset.
         channel (string):  Name to identify dataset locally
         split (string): The split to present - splits are determined by ``splits`` dictionary
@@ -55,7 +59,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         key (string, optional): The key field's ``fieldname``
         video_format (string, optional): The video pixel format one of: 'yuv420p','rgb24', 'rgba'
         video_framerate (int, optional): if specified, it will resample the video
-            so that it has `frame_rate`, and then the clips will be defined on the resampled video
+            so that it has `frame_rate`, and then the video_cliplen will be defined on the resampled video
         video_cliplen (int, optional): number of frames in a clip
         video_stridelen (int, tuple, optional): number of frames between each clip, if tuple a range for the stride (1,199) random between 1 and 199
         video_transform (callable, optional): A function/transform that  takes in a TxHxWxC video
@@ -83,7 +87,7 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         text_lang (string, optional): the language of the captions using ISO 639-1. Default "en". 
         text_transform (callable, optional): A function/transform that takes in a string of text
             and returns the embedded text as a Tensor of any size.
-
+        dataset_fraction (float): fractuion of dataset to use (0. - 1.)
     Returns:
         tuple of data fields from dataset filtered by ``fields`` and ``key``. 
         ``fields`` list items will return data in the following formats:  
@@ -112,11 +116,11 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
     def __init__(self, root_dir, channel, split='train', fields=['IMAGE','TIME'], key='IMAGE',
                  video_format='rgb24', video_framerate=None, video_cliplen=None, video_stridelen=None, image_transform=None, video_transform=None,
                  audio_format='flt', audio_layout='mono', audio_sr=16000,  audio_cliplen=None, audio_transform=None,
-                 text_lang='en', text_transform=None,
+                 text_lang='en', text_transform=None, dataset_fraction=1.0,
                  download=False, api_key=None, channel_id=None, user_name=None, splits={'train':0.80, 'test':0.20}):
 
         
-        assert YouTubeDataset.F_VF_DATA in fields or YouTubeDataset.F_TIME in fields, "YouTubeDataset: fields must contain F_VF_DATA and/or F_TIME"     
+        assert (key in fields), "YouTubeDataset: fields must contain key"     
         assert not download or (download and api_key != None), "YouTubeDataset: download requires api_key from Google API Console with Youtube access" 
         assert not download or (download and (channel_id != None or user_name != None)), "YouTubeDataset: download requires one of channel_id or user_name"
         assert key in fields, "YouTubeDataset: key must be in fields"
@@ -144,6 +148,9 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         self.text_transform = text_transform
         self.text_lang = text_lang
         
+        if dataset_fraction > 0.0 and dataset_fraction < 1.0:
+            self.dataframe=self.dataframe.sample(frac=dataset_fraction)
+
         self.start = 0
         self.size = self.dataframe.shape[0]
         self.video_format = video_format
@@ -154,10 +161,36 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         self.audio_sr = audio_sr
         self.audio_layout = audio_layout
         self.audio_cliplen = audio_cliplen
+        
+        self.raw_text_cache = None
+        
+        self._len = None
+        
+        
 
     def __iter__(self):
         return YTDSIterator(self)
+
+    @property    
+    def length(self):
+        if self._len == None:
+            if self.key == 'TEXT':
+                self._len = len(self.raw_text)
+            elif self.key == 'VIDEO' or self.key == 'IMAGE':
+                if self.video_stridelen is None:
+                    stride = self.video_cliplen
+                elif isinstance(self.video_stridelen, tuple):
+                    stride = random.randint(*self.video_stridelen)
+                else:
+                    stride = self.video_stridelen
+                   
+                self._len = int((sum([dur for pts, dur, text in self.raw_text]) * (self.video_framerate if self.video_framerate != None else 24)) // stride)
+            elif self.key == 'AUDIO':
+                self._len = int((sum([dur for pts, dur, text in self.raw_text]) * (self.video_framerate if self.video_framerate != None else 24)) //
+                                (self.audio_cliplen if self.audio_cliplen != None else 512))
+        return self._len
     
+                    
     @property
     def fieldnames(self):
         """Get the list of valid ``fieldnames``.
@@ -168,15 +201,28 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
                 YouTubeDataset.F_DURATION, YouTubeDataset.F_VF_DATA, YouTubeDataset.F_IF_DATA, YouTubeDataset.F_AF_DATA, 
                 YouTubeDataset.F_CC_TEXT]
     
+
+    @property
+    def raw_text(self):
+        """Returns the raw TEXT of the dataset as a list
+        Returns:
+            list: [(TIME, DURATION, TEXT) ...] the Caption portion of the dataset
+        """
+        if self.raw_text_cache == None:
+            self.raw_text_cache = [ (pts, dur, text) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
+                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
+                                                             key=YouTubeDataset.F_CC_TEXT) ]
+        return self.raw_text_cache
+    
     @property
     def max_text_dur(self):
         """Returns the max duration of the TEXT fields.
         Returns:
             float: duration in seconds
         """
-        return max([dur for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
-                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
-                                                             key=YouTubeDataset.F_CC_TEXT)])
+        
+        return max([dur for pts, dur, text in self.raw_text])
+
 
     @property
     def max_text_len(self):
@@ -184,38 +230,93 @@ class YouTubeDataset(torch.utils.data.IterableDataset):
         Returns:
             int: length in characters
         """
-        return max([len(text) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
-                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
-                                                             key=YouTubeDataset.F_CC_TEXT)])
+        return max([len(text) for pts, dur, text in self.raw_text])
     
-    def max_text_tokens(self,  tokenizer):
+    def max_text_tokens(self,  tokenizer, vocab=None):
         """Returns the max number of tokens in the TEXT fields, using the specified totchtext tokenizer
         Returns:
             int: length in tokens
         """
-        return max([len(tokenizer(text)) for pts, dur, text in YouTubeDataset(self.root_dir, self.channel, self.split, 
-                                                             fields=[YouTubeDataset.F_TIME,YouTubeDataset.F_DURATION,YouTubeDataset.F_CC_TEXT],
-                                                             key=YouTubeDataset.F_CC_TEXT)])
+        if vocab is None:
+            return max([len(tokenizer(text)) for pts, dur, text in self.raw_text])
+        else:
+            return max([len([t for t in tokenizer(text) if str(t) in vocab.stoi]) for pts, dur, text in self.raw_text])
     
+    @staticmethod    
+    def build_vocab(root_dir, channel, vocab='vocab.txt', language="en", pretrained="fasttext.en.300d", pos=None, lemmatize=False):
+        """Returns a new torchtext.experimental.vectors.Vectors object for the dataset, either from the vectors file or
+           building a new one from the dataset using the tokenizer and the pretrained vectors
+        Params:
+            vocab: file name in the dataset directory of the cached vocab 
+            tokenizer: tokenizer function
+            pretrained: one of available pretrained vectors: charngram.100d fasttext.en.300d fasttext.simple.300d glove.42B.300d
+                        glove.840B.300d glove.twitter.27B.25d glove.twitter.27B.50d glove.twitter.27B.100d glove.twitter.27B.200d g
+                        love.6B.50d glove.6B.100d glove.6B.200d glove.6B.300d
+            pos: parts of speech to include in vocab, None for all words or, list of Universal POS tags: 
+                    'ADJ','ADP','PUNCT','ADV','AUX','SYM','INTJ','CONJ','X','NOUN','DET','PROPN','NUM','VERB','PART','PRON','SCONJ'
+        Returns: 
+            torchtext.experimental.vectors.Vectors
+        """
+        cache_path = os.path.join(root_dir, channel, vocab)
+        
+        if not os.path.exists(cache_path):
+            assert pretrained in torchtext.vocab.pretrained_aliases, "build_vector: allowed pretrained vectors values are " + str(torchtext.vocab.pretrained_aliases.keys())
+            counter = Counter()
+            pt = torchtext.vocab.pretrained_aliases[pretrained]()
+
+            nlp = spacy.load(language)
+            
+            if pos is None and not lemmatize:
+                tokenizer = lambda text: [t.text for t in nlp.tokenizer(text) if t.text in pt.stoi]
+            else:
+                tokenizer = lambda text: [t.text if not lemmatize else t.lemma_ for t in nlp(text) if t.text in pt.stoi and t.pos_ in pos]
+            
+            
+            for split in ['train', 'test', 'validate']:
+                for [text] in tqdm(YouTubeDataset(root_dir, channel, split, fields=[YouTubeDataset.F_CC_TEXT], key=YouTubeDataset.F_CC_TEXT), desc=split):
+                    counter.update(tokenizer(text))
+
+            toks = {tok: ix for ix, tok in enumerate(counter)}
+            vecs = [pt[tok] for tok in counter]
+
+            with open(cache_path, 'w') as fp:
+                fp.writelines([",".join([t, str(counter[t]), " ".join([*[str(float(d)) for d in vecs[toks[t]]], "\n"])]) for t in toks])
+                
+        # Open the Vector   
+        with open(cache_path, 'r') as fp:
+            toks={}
+            vecs=[]
+            counter=Counter()
+        
+            for ix, line in enumerate(fp.readlines()):
+                key,count,vec = line.split(',')
+                toks[key] = ix
+                counter[key] = int(count)
+                vecs.append(torch.tensor([float(v) for v in vec.split(' ') if v != "\n"]))
+            vocab = torchtext.vocab.Vocab(counter)
+            vocab.set_vectors(toks, vecs, 300)
+            return vocab
     
+            
     @staticmethod
     def worker_init(worker_id):
         """Worker Init Function for DataLoader. See torch.utils.data.DataLoader
-        Args:
+        Parameters:
             worker_id (int): The ID of the worker
         """
-        
-        
         worker_info = torch.utils.data.get_worker_info()
         dataset = worker_info.dataset  # the dataset copy in this worker process
         overall_start = dataset.start
         overall_size = dataset.size
-        # configure the dataset to only process the split workload
-        per_worker = int(math.ceil(overall_size / float(worker_info.num_workers)))
         worker_id = worker_info.id
+
+        if overall_size < worker_info.num_workers:
+            raise ValueError('Number of workers must be less than number of videos in split ('+str(overall_size)+')')
+
+        # configure the dataset to only process the split workload
+        per_worker = overall_size // worker_info.num_workers
         dataset.start = overall_start + worker_id * per_worker
         dataset.size = min(per_worker, overall_size - dataset.start) 
-        
 
 
 class CCFrame():
@@ -281,62 +382,83 @@ class YTDSIterator():
         self.next_active()
 
     def next_active(self):
-        # Get The Active Record from the dataset
-        if self.active_ix == -1:
-            self.active_ix = self.dataset.start
-        else:
-            self.active_ix = self.active_ix + 1
-        
-        if self.active_ix >= self.dataset.start + self.dataset.size:
-            raise StopIteration()
+        try:
+            # Get The Active Record from the dataset
+            if self.active_ix == -1:
+                self.active_ix = self.dataset.start
+            else:
+                self.active_ix = self.active_ix + 1
+
+            if self.active_ix >= (self.dataset.start + self.dataset.size):
+                raise StopIteration()
             
-        self.active = self.dataset.dataframe.iloc[self.active_ix]
+            self.active = self.dataset.dataframe.iloc[self.active_ix]
 
-        self.video_id = self.active['video_id']
-        self.title = self.active['title']  
-        self.description = self.active['description']     
+            self.video_id = self.active['video_id']
+            self.title = self.active['title']  
+            self.description = self.active['description']     
 
-        video_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'video', self.video_id + '.mp4')
-        caption_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'caption', self.video_id + '.xml')
+            video_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'video', self.video_id + '.mp4')
+            caption_path = os.path.join(self.dataset.root_dir,self.dataset.channel, 'caption', self.video_id + '.xml')
 
-        # Initialize Video and Audio
-        container = av.open(video_path)
-        self.video = container.decode(video=0)
-        self.video_rate = container.streams.video[0].average_rate
-        
-        container = av.open(video_path)
-        self.audio = container.decode(audio=0)
+            # Initialize Video 
+            if (YouTubeDataset.F_VF_DATA in self.dataset.fields or 
+                YouTubeDataset.F_IF_DATA in self.dataset.fields):                        
+                self.vcontainer = av.open(video_path)
+                self.video = self.vcontainer.decode(video=0)
+                self.video_rate = self.vcontainer.streams.video[0].average_rate
+            else:
+                self.vcontainer = None
+                self.video = None
+                self.video_rate = 0
 
-        if (container.streams.audio[0].sample_rate != self.dataset.audio_sr or 
-            container.streams.audio[0].layout != self.dataset.audio_layout or
-            container.streams.audio[0].format != self.dataset.audio_format):
-            self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_format, self.dataset.audio_layout, self.dataset.audio_sr)
-        else:
-            self.audio_resampler = None
+            # Initialize Audio 
+            if (YouTubeDataset.F_AF_DATA in self.dataset.fields):                        
+                self.acontainer = av.open(video_path)
+                self.audio = self.acontainer.decode(audio=0)
+                if (self.acontainer.streams.audio[0].sample_rate != self.dataset.audio_sr or 
+                    self.acontainer.streams.audio[0].layout != self.dataset.audio_layout or
+                    self.acontainer.streams.audio[0].format != self.dataset.audio_format):
+                    self.audio_resampler = av.audio.resampler.AudioResampler(self.dataset.audio_format, 
+                                                                             self.dataset.audio_layout, self.dataset.audio_sr)
+                else:
+                    self.audio_resampler = None
+            else:
+                self.acontainer = None
+                self.audio = None
+                self.audio_resampler = None
 
-        # init captions
-        self.caption = iter(CCFrame.ParseCC(caption_path))
+            # init captions
+            if YouTubeDataset.F_CC_TEXT in self.dataset.fields:
+                self.caption = iter(CCFrame.ParseCC(caption_path))
+            else:
+                self.caption = None
+                
+            # initialize VideoFrame start
+            self.vclip = []
+            self.vclip_time = 0.0
 
-        # initialize VideoFrame start
-        self.vclip = []
-        self.vclip_time = 0.0
-        
-        # Initialize Audioframe Start
-        self.aclip_time = 0.0
-        self.aclip = []
+            # Initialize Audioframe Start
+            self.aclip_time = 0.0
+            self.aclip = []
 
-        # Initialize Caption Start
-        self.cclip_time = 0.0
-        self.cclip_duration = 0.0
-        self.cclip = []
-        
-        # set up the result
-        self.result = {
-            YouTubeDataset.F_VIDEOID: self.video_id,
-            YouTubeDataset.F_TITLE: self.title,
-            YouTubeDataset.F_DESCRIPTION: self.description
-        }
+            # Initialize Caption Start
+            self.cclip_time = 0.0
+            self.cclip_duration = 0.0
+            self.cclip = []
 
+            # set up the result
+            self.result = {
+                YouTubeDataset.F_VIDEOID: self.video_id,
+                YouTubeDataset.F_TITLE: self.title,
+                YouTubeDataset.F_DESCRIPTION: self.description
+            }
+        except StopIteration as si:
+            raise si
+            
+        except Exception as e:
+            print('Exception', type(e), e.args, e)
+            raise StopIteration()
         
     def __iter__(self):
         return self
@@ -352,7 +474,10 @@ class YTDSIterator():
                 clip_time = self.cclip_time
                 
             if self.dataset.key == YouTubeDataset.F_VF_DATA:
-                clip_duration = self.dataset.video_cliplen / self.video_rate
+                if self.dataset.video_framerate == None:
+                    clip_duration = self.dataset.video_cliplen / self.video_rate
+                else:
+                    clip_duration = self.dataset.video_cliplen / self.dataset.video_framerate
                 clip_time = self.vclip_time
             
             if self.dataset.key == YouTubeDataset.F_IF_DATA:
@@ -400,14 +525,17 @@ class YTDSIterator():
                     
                 if self.dataset.text_transform:
                     cc_text = self.dataset.text_transform(cc_text)
-
+                    
                 result[YouTubeDataset.F_CC_TEXT] = cc_text
 
 
             if YouTubeDataset.F_VF_DATA in self.dataset.fields:                        
                 # get the video segment
                 if self.dataset.video_cliplen is None:
-                    video_cliplen = int(clip_duration * self.video_rate)
+                    if self.dataset.video_framerate == None:
+                        video_cliplen = int(clip_duration * self.video_rate)
+                    else:
+                        video_cliplen = int(clip_duration * self.dataset.video_framerate)
                 else:
                     video_cliplen = self.dataset.video_cliplen
 
@@ -419,32 +547,45 @@ class YTDSIterator():
                     stride = self.dataset.video_stridelen
 
                 try:
-                    while len(self.vclip) < video_cliplen:
+                    if self.dataset.video_framerate == None:
+                        video_chunklen = max(stride,video_cliplen) + 1
+                    else:
+                        video_chunklen = max(stride,video_cliplen) * self.video_rate // self.dataset.video_framerate + 1
+
+                    while len(self.vclip) < video_chunklen:
                         vf = next(self.video)
-                        vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
+                        #vf_data = torch.from_numpy(np.transpose(vf.to_ndarray(format=self.dataset.video_format), (2, 0, 1))) # (C, H, W) Image Tensor
+                        vf_data = torch.from_numpy(vf.to_ndarray(format=self.dataset.video_format)).permute(2, 0, 1) # (C, H, W) Image Tensor
                         if self.dataset.image_transform:
                             vf_data = self.dataset.image_transform(vf_data)
                         self.vclip.append((vf_data, vf.time))
 
                 except StopIteration:
-                    if len(self.vclip) == 0:
-                        raise StopIteration()            
+#                    if len(self.vclip) == 0:
+                    raise StopIteration()            
 
                 if self.dataset.video_framerate != None and self.dataset.video_framerate != self.video_rate:
-                    idx = YTDSIterator._resample_video_idx(len(self.vclip), self.video_rate, self.dataset.video_framerate)
-                    self.vclip = self.vclip[idx]
-
-                #vf_data = torch.stack([ i[0] for i in self.vclip]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
-                vf_data = torch.stack([ i[0] for i in self.vclip]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
-                #vf_data = torch.stack([ i[0] for i in self.vclip]) # (T,C,H,W) - Video Tensor   
+                    stride = stride * self.video_rate // self.dataset.video_framerate 
+                    num_frames = len(self.vclip) * self.dataset.video_framerate // self.video_rate
+                    idx = YTDSIterator._resample_video_idx(num_frames, self.video_rate, self.dataset.video_framerate)
+                    if isinstance(idx, slice):
+                        vclip = self.vclip[idx]
+                    else:
+                        vclip = [ self.vclip[i] for i in idx ]
+                else:
+                    vclip = self.vclip
+                    
+                #vf_data = torch.stack([ i[0] for i in vclip[:video_cliplen]]).permute(1, 0, 2, 3) # (C,T,H,W) - Video Tensor   
+                vf_data = torch.stack([ i[0] for i in vclip[:video_cliplen]]).permute(0, 2, 3, 1) # (T,H,W,C) - Video Tensor   
+                #vf_data = torch.stack([ i[0] for i in vclip[:video_cliplen]]) # (T,C,H,W) - Video Tensor   
 
                 if self.dataset.video_transform:
                     vf_data = self.dataset.video_transform(vf_data)
                 result[YouTubeDataset.F_VF_DATA] = vf_data    
 
-                self.vclip_time = self.vclip[0][1]
+                self.vclip_time = vclip[0][1]
 
-                self.vclip = self.vclip[stride:]
+                self.vclip = vclip[stride:]
                     
                 if self.dataset.key == YouTubeDataset.F_VF_DATA:
                     result[YouTubeDataset.F_TIME] = clip_time = self.vclip_time
@@ -542,7 +683,7 @@ def YTDSVideoDownloadThunk(t):
 
 class YouTubeDatasetDownloader():
     def __init__(self, root_dir, channel, splits, api_key, 
-                 channel_id=None, user_name=None, caption_lang="en", youtube_url = 'http://youtube.com/watch?v='):
+                 channel_id=None, user_name=None, caption_lang="en", types=['VIDEO', 'CAPTION'], youtube_url = 'http://youtube.com/watch?v='):
     
         assert channel_id != None or user_name != None, "channel_id or user_name must be specified" 
 
@@ -557,16 +698,18 @@ class YouTubeDatasetDownloader():
         self.splits = splits
         self.youtube_url = youtube_url
         self.caption_lang = caption_lang
-        
+        self.types=types
         
         self.channel_path = os.path.join(root_dir, channel)
         os.makedirs(self.channel_path, exist_ok=True)
 
-        self.video_path = os.path.join(self.channel_path, 'video')
-        self.caption_path = os.path.join(self.channel_path, 'caption')
+        if 'VIDEO' in self.types:
+            self.video_path = os.path.join(self.channel_path, 'video')
+            os.makedirs(self.video_path, exist_ok=True)
 
-        os.makedirs(self.video_path, exist_ok=True)
-        os.makedirs(self.caption_path, exist_ok=True)
+        if 'CAPTION' in self.types:    
+            self.caption_path = os.path.join(self.channel_path, 'caption')
+            os.makedirs(self.caption_path, exist_ok=True)
 
 
 
@@ -608,7 +751,7 @@ class YouTubeDatasetDownloader():
     def videos(self, playlist_ids):
         videos = []
 
-        for playlist_id, playlist_size in playlist_ids:
+        for playlist_id, playlist_size in tqdm(playlist_ids):
             nextPageToken=''
             while True:
                 pli = self.ytapi.get('playlistItems', part='snippet,contentDetails', playlistId=playlist_id, pageToken=nextPageToken) 
@@ -652,13 +795,16 @@ class YouTubeDatasetDownloader():
 
                 if yt.captions[self.caption_lang] != None:
                     #TODO: Download at a specific resolution - currently highest
-                    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').asc().first()
-                    video_filename = video_id #+ '.mp4' 
-                    stream.download(output_path=self.video_path, filename=video_filename)
-                    caption = yt.captions[self.caption_lang]
-                    caption_filename = os.path.join(self.caption_path, video_id + ".xml")
-                    with open(caption_filename, "w") as caption_file:
-                        caption_file.write(caption.xml_captions)
+                    if 'VIDEO' in self.types:
+                        stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').asc().first()
+                        video_filename = video_id #+ '.mp4' 
+                        stream.download(output_path=self.video_path, filename=video_filename)
+                    
+                    if 'CAPTION' in self.types:
+                        caption = yt.captions[self.caption_lang]
+                        caption_filename = os.path.join(self.caption_path, video_id + ".xml")
+                        with open(caption_filename, "w") as caption_file:
+                            caption_file.write(caption.xml_captions)
                 else:
                     drops.append(ix)
             
